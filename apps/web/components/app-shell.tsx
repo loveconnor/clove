@@ -14,6 +14,7 @@ import {
   Settings,
   ShieldCheck,
   User,
+  UserPlus,
 } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@loveui/ui/ui/avatar"
@@ -177,36 +178,44 @@ function OrganizationSwitcher({
           </Button>
         }
       />
-      <MenuPopup align="start" className="w-56">
+      <MenuPopup align="start" className="w-64">
         <MenuGroup>
-          <MenuGroupLabel>Organizations</MenuGroupLabel>
-          {organizations.map((organization) => (
-            <MenuItem
-              key={organization.id}
-              render={<Link href={`/${organization.name}`} />}
-            >
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">
-                  {organization.display_name || organization.name}
-                </span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {organization.role || "member"}
-                </span>
+          <MenuGroupLabel>Personal</MenuGroupLabel>
+          <MenuItem render={<Link href={`/${viewer.user.username}`} />}>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{viewer.user.username}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                Personal namespace
               </span>
-              <Badge variant="outline">Org</Badge>
-            </MenuItem>
-          ))}
-          {organizations.length === 0 && (
-            <MenuItem render={<Link href={`/${viewer.user.username}`} />}>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">{viewer.user.username}</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  Personal namespace
-                </span>
-              </span>
-            </MenuItem>
-          )}
+            </span>
+          </MenuItem>
         </MenuGroup>
+        {organizations.length > 0 && (
+          <MenuGroup>
+            <MenuGroupLabel>Organizations</MenuGroupLabel>
+            {organizations.map((organization) => (
+              <MenuItem
+                key={organization.id}
+                render={<Link href={`/${organization.name}`} />}
+              >
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate">
+                    {organization.display_name || organization.name}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {organization.role || "member"}
+                  </span>
+                </span>
+                <Badge variant="outline">Org</Badge>
+              </MenuItem>
+            ))}
+          </MenuGroup>
+        )}
+        <MenuSeparator />
+        <MenuItem render={<Link href="/new/organization" />}>
+          <UserPlus />
+          New organization
+        </MenuItem>
       </MenuPopup>
     </Menu>
   )

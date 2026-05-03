@@ -20,9 +20,21 @@ export type Organization = {
   id: string
   name: string
   display_name?: string
+  description?: string
   owner_id: string
-  role?: string
+  role?: "owner" | "admin" | "member" | string
   created_at: string
+  updated_at: string
+}
+
+export type OrganizationMember = {
+  user_id: string
+  username: string
+  email: string
+  display_name?: string
+  avatar_url?: string
+  role: "owner" | "admin" | "member"
+  joined_at: string
 }
 
 export type Repository = {
@@ -76,6 +88,13 @@ export async function getOrganization(owner: string) {
     `/api/organizations/${encodeURIComponent(owner)}`
   )
   return data.organization
+}
+
+export async function getOrganizationMembers(owner: string) {
+  const data = await apiFetch<{ members: OrganizationMember[] }>(
+    `/api/organizations/${encodeURIComponent(owner)}/members`
+  )
+  return data.members
 }
 
 export async function getRepositories(owner?: string) {

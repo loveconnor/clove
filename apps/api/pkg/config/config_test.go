@@ -16,6 +16,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Port != 8080 {
 		t.Fatalf("expected default port, got %d", cfg.Port)
 	}
+	if cfg.RepositoryRoot != "/data/repos" {
+		t.Fatalf("expected default repository root, got %q", cfg.RepositoryRoot)
+	}
 }
 
 func TestLoadInvalidPort(t *testing.T) {
@@ -48,6 +51,7 @@ func clearEnv(t *testing.T) {
 		"DATABASE_URL",
 		"DATABASE_DRIVER",
 		"DATABASE_PING_TIMEOUT",
+		"REPOSITORY_ROOT",
 		"WORKOS_API_KEY",
 		"WORKOS_CLIENT_ID",
 		"WORKOS_REDIRECT_URI",

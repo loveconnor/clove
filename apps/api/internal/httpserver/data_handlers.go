@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -704,7 +707,17 @@ func (s *Server) handleCreateRepository(w http.ResponseWriter, r *http.Request) 
 	}
 
 	repositoryID := uuid.NewString()
-	gitPath := ownerType + "/" + ownerID + "/" + req.Name + ".git"
+	gitPath, err := s.initializeBareRepository(r, repositoryID)
+	if err != nil {
+		s.logger.Warn("failed to initialize bare repository",
+			"request_id", RequestID(r.Context()),
+			"repository_id", repositoryID,
+			"error", err,
+		)
+		apierror.Write(w, r, apierror.Internal("Could not initialize repository."))
+		return
+	}
+
 	var repository repositoryResponse
 	err = s.db.QueryRowContext(r.Context(), `
 		INSERT INTO repositories (id, owner_type, owner_id, name, description, visibility, git_path)
@@ -725,6 +738,14 @@ func (s *Server) handleCreateRepository(w http.ResponseWriter, r *http.Request) 
 		&repository.UpdatedAt,
 	)
 	if err != nil {
+		if removeErr := os.RemoveAll(gitPath); removeErr != nil {
+			s.logger.Warn("failed to remove bare repository after metadata insert failure",
+				"request_id", RequestID(r.Context()),
+				"repository_id", repositoryID,
+				"git_path", gitPath,
+				"error", removeErr,
+			)
+		}
 		apierror.Write(w, r, apierror.Internal("Could not create repository."))
 		return
 	}
@@ -733,6 +754,27 @@ func (s *Server) handleCreateRepository(w http.ResponseWriter, r *http.Request) 
 		"repository": repository,
 		"request_id": RequestID(r.Context()),
 	})
+}
+
+func (s *Server) initializeBareRepository(r *http.Request, repositoryID string) (string, error) {
+	root := strings.TrimSpace(s.cfg.RepositoryRoot)
+	if root == "" {
+		root = "/data/repos"
+	}
+	gitPath := filepath.Join(root, repositoryID+".git")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+
+	cmd := exec.CommandContext(r.Context(), "git", "init", "--bare", gitPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			return "", err
+		}
+		return "", errors.Join(err, errors.New(message))
+	}
+	return gitPath, nil
 }
 
 func (s *Server) resolveRepositoryOwner(r *http.Request, principal auth.Principal, owner string) (string, string, error) {

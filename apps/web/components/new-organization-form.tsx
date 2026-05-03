@@ -139,7 +139,12 @@ export function NewOrganizationForm() {
             {pending ? <Loader2 className="animate-spin" /> : null}
             Create organization
           </Button>
-          <Button type="button" variant="ghost" disabled={pending}>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={pending}
+            onClick={() => router.push("/dashboard")}
+          >
             Cancel
           </Button>
         </div>

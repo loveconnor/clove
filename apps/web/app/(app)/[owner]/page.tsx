@@ -76,7 +76,7 @@ export default async function OwnerPage({
               </Button>
             )}
             <Button size="sm" asChild>
-              <Link href="/new">
+              <Link href="/new/repository">
                 <ArrowRight />
                 New repository
               </Link>
@@ -117,7 +117,7 @@ export default async function OwnerPage({
               </p>
             </div>
             <Button variant="outline" size="sm" asChild>
-              <Link href="/new">
+              <Link href="/new/repository">
                 New
                 <ArrowRight />
               </Link>

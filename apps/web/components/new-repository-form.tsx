@@ -137,6 +137,20 @@ export function NewRepositoryForm({
               </span>
             </span>
           </label>
+          <label className="flex cursor-pointer items-start gap-3 rounded-lg border bg-background p-3">
+            <input
+              type="radio"
+              name="visibility"
+              value="public"
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-sm font-medium">Public</span>
+              <span className="block text-xs leading-5 text-muted-foreground">
+                Visible to anyone who can reach this Clove instance.
+              </span>
+            </span>
+          </label>
         </fieldset>
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={pending}>

@@ -21,6 +21,7 @@ The server listens on `0.0.0.0:8080` by default.
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
 | `DATABASE_URL` | empty | Postgres connection string. When empty, DB and migrations are skipped. |
 | `DATABASE_DRIVER` | `pgx` | SQL driver name. |
+| `REPOSITORY_ROOT` | `/data/repos` | Filesystem directory for bare Git repositories. New repositories run `git init --bare {REPOSITORY_ROOT}/{repo_id}.git`. |
 | `WORKOS_API_KEY` | empty | WorkOS API key. Required for auth endpoints. |
 | `WORKOS_CLIENT_ID` | empty | WorkOS AuthKit client ID. Required for auth endpoints and JWT validation. |
 | `WORKOS_REDIRECT_URI` | `http://localhost:8080/api/auth/callback` | WorkOS AuthKit callback URL. |
@@ -44,7 +45,11 @@ The server listens on `0.0.0.0:8080` by default.
 | `POST` | `/api/auth/logout` | Clear local cookies and revoke the WorkOS session when possible. |
 | `GET` | `/api/me` | Protected current-user endpoint backed by WorkOS session middleware. |
 | `GET` | `/api/organizations` | Protected list of organizations for the current user. |
+| `POST` | `/api/organizations` | Protected organization creation; the current user becomes owner. |
 | `GET` | `/api/organizations/{owner}` | Protected organization lookup by slug/name. |
+| `PATCH` | `/api/organizations/{owner}` | Protected organization metadata update for owners and admins. |
+| `GET` | `/api/organizations/{owner}/members` | Protected member list for an accessible organization. |
+| `POST` | `/api/organizations/{owner}/invitations` | Protected invitation placeholder for owners and admins. |
 | `GET` | `/api/repositories` | Protected repository list visible to the current user. |
 | `POST` | `/api/repositories` | Protected repository creation for the current user or an accessible organization. |
 | `GET` | `/api/repositories/{owner}/{repo}` | Protected repository lookup. |

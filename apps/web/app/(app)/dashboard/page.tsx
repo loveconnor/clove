@@ -1,6 +1,12 @@
 import Link from "next/link"
 import { redirect } from "next/navigation"
-import { ArrowRight, Database, GitBranch, GitPullRequestArrow } from "lucide-react"
+import {
+  ArrowRight,
+  Database,
+  GitBranch,
+  GitPullRequestArrow,
+  UserPlus,
+} from "lucide-react"
 
 import { Badge } from "@loveui/ui/ui/badge"
 import { Button } from "@loveui/ui/ui/button"
@@ -33,7 +39,7 @@ export default async function DashboardPage() {
           </p>
         </div>
         <Button asChild>
-          <Link href="/new">
+          <Link href="/new/repository">
             New repository
             <ArrowRight />
           </Link>
@@ -90,13 +96,20 @@ export default async function DashboardPage() {
           </Card>
 
           <Card variant="outline" className="rounded-lg">
-            <CardHeader className="border-b">
+            <CardHeader className="flex items-center justify-between gap-3 border-b">
               <CardTitle>Organizations</CardTitle>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/new/organization">
+                  <UserPlus />
+                  New
+                </Link>
+              </Button>
             </CardHeader>
             <CardPanel className="grid gap-3">
               {organizations.length === 0 ? (
                 <p className="text-sm leading-6 text-muted-foreground">
                   No organizations are associated with this WorkOS user yet.
+                  Create one to group repositories, members, and policy.
                 </p>
               ) : (
                 organizations.map((organization) => (

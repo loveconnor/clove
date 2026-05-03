@@ -6,12 +6,21 @@ import {
   GitBranch,
   GitPullRequestArrow,
   LockKeyhole,
+  Settings,
   ShieldCheck,
 } from "lucide-react"
 
 import { Badge } from "@loveui/ui/ui/badge"
 import { Button } from "@loveui/ui/ui/button"
 import { Card, CardHeader, CardPanel, CardTitle } from "@loveui/ui/ui/card"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@loveui/ui/ui/empty"
 
 import { APIRequestError, getRepository } from "@/apps/web/lib/api"
 
@@ -22,6 +31,7 @@ export default async function RepositoryPage({
 }) {
   const { owner, repo } = await params
   const repository = await loadRepositoryData(owner, repo)
+  const cloneURL = `https://clove.dev/${repository.owner}/${repository.name}.git`
 
   return (
     <div className="space-y-6">
@@ -61,6 +71,12 @@ export default async function RepositoryPage({
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">{repository.default_branch}</Badge>
             <Badge variant="success">DB backed</Badge>
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/${repository.owner}/${repository.name}/settings`}>
+                <Settings />
+                Settings
+              </Link>
+            </Button>
           </div>
         </div>
       </section>
@@ -86,45 +102,52 @@ export default async function RepositoryPage({
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <Card variant="outline" className="rounded-lg">
           <CardHeader className="border-b">
-            <CardTitle>Repository metadata</CardTitle>
+            <CardTitle>Files</CardTitle>
           </CardHeader>
-          <CardPanel className="grid gap-4">
-            <div className="grid gap-3 md:grid-cols-2">
-              <ReviewBlock
-                title="Repository ID"
-                detail={repository.id}
-                badge="DB"
-              />
-              <ReviewBlock
-                title="Git path"
-                detail={repository.git_path}
-                badge="Git"
-              />
-              <ReviewBlock
-                title="Created"
-                detail={formatDate(repository.created_at)}
-                badge="Audit"
-              />
-              <ReviewBlock
-                title="Updated"
-                detail={formatDate(repository.updated_at)}
-                badge="Audit"
-              />
-            </div>
+          <CardPanel>
+            <Empty className="border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <GitBranch />
+                </EmptyMedia>
+                <EmptyTitle>This repository is empty</EmptyTitle>
+                <EmptyDescription>
+                  Push an existing project or add a first commit to populate
+                  files, branches, pull requests, and checks.
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent className="max-w-full items-stretch">
+                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+                  git remote add origin {cloneURL}
+                </code>
+                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+                  git branch -M {repository.default_branch}
+                </code>
+                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+                  git push -u origin {repository.default_branch}
+                </code>
+              </EmptyContent>
+            </Empty>
           </CardPanel>
         </Card>
 
         <div className="space-y-6">
           <Card variant="outline" className="rounded-lg">
-          <CardHeader className="border-b">
-              <CardTitle>Review surfaces</CardTitle>
+            <CardHeader className="border-b">
+              <CardTitle>Repository metadata</CardTitle>
             </CardHeader>
-            <CardPanel>
-              <p className="text-xs leading-5 text-muted-foreground">
-                Pull requests, checks, branch protections, and review snapshots
-                are intentionally not faked here. These panels will populate
-                when their backend tables and endpoints exist.
-              </p>
+            <CardPanel className="grid gap-3">
+              <ReviewBlock title="Clone URL" detail={cloneURL} />
+              <ReviewBlock title="Repository ID" detail={repository.id} />
+              <ReviewBlock title="Git path" detail={repository.git_path} />
+              <ReviewBlock
+                title="Created"
+                detail={formatDate(repository.created_at)}
+              />
+              <ReviewBlock
+                title="Updated"
+                detail={formatDate(repository.updated_at)}
+              />
             </CardPanel>
           </Card>
 
@@ -134,16 +157,8 @@ export default async function RepositoryPage({
             </CardHeader>
             <CardPanel>
               <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 font-mono text-xs">
-                git@clove.dev:{repository.owner}/{repository.name}.git
+                {cloneURL}
               </code>
-              <div className="mt-3 flex gap-2">
-                <Button size="sm" variant="outline">
-                  SSH
-                </Button>
-                <Button size="sm" variant="ghost">
-                  HTTPS
-                </Button>
-              </div>
             </CardPanel>
           </Card>
         </div>
@@ -208,19 +223,16 @@ function Metric({
 function ReviewBlock({
   title,
   detail,
-  badge,
 }: {
   title: string
   detail: string
-  badge: string
 }) {
   return (
-    <article className="rounded-lg border bg-background p-4">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <Badge variant="outline">{badge}</Badge>
-      </div>
-      <p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p>
+    <article>
+      <h2 className="text-sm font-medium">{title}</h2>
+      <p className="mt-1 break-all text-sm leading-6 text-muted-foreground">
+        {detail}
+      </p>
     </article>
   )
 }

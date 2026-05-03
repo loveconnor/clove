@@ -19,6 +19,7 @@ type Config struct {
 	DatabaseURL       string
 	DatabaseDriver    string
 	DatabasePingTime  time.Duration
+	RepositoryRoot    string
 	WorkOSAPIKey      string
 	WorkOSClientID    string
 	WorkOSRedirectURI string
@@ -82,6 +83,7 @@ func Load() (Config, error) {
 		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		DatabaseDriver:    envString("DATABASE_DRIVER", "pgx"),
 		DatabasePingTime:  databasePingTime,
+		RepositoryRoot:    envString("REPOSITORY_ROOT", "/data/repos"),
 		WorkOSAPIKey:      strings.TrimSpace(os.Getenv("WORKOS_API_KEY")),
 		WorkOSClientID:    strings.TrimSpace(os.Getenv("WORKOS_CLIENT_ID")),
 		WorkOSRedirectURI: envString("WORKOS_REDIRECT_URI", "http://localhost:8080/api/auth/callback"),

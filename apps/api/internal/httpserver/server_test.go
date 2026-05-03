@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -155,6 +158,34 @@ func TestLoginSetsSessionCookies(t *testing.T) {
 	}
 	if !hasCookie(cookies, "refresh", "refresh-token") {
 		t.Fatalf("expected refresh cookie, got %#v", cookies)
+	}
+}
+
+func TestInitializeBareRepository(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary is not available")
+	}
+
+	root := t.TempDir()
+	server := &Server{
+		cfg:    config.Config{RepositoryRoot: root},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/repositories", nil)
+
+	gitPath, err := server.initializeBareRepository(req, "repo_123")
+	if err != nil {
+		t.Fatalf("initialize bare repository: %v", err)
+	}
+
+	wantPath := filepath.Join(root, "repo_123.git")
+	if gitPath != wantPath {
+		t.Fatalf("expected git path %q, got %q", wantPath, gitPath)
+	}
+	if _, err := os.Stat(filepath.Join(gitPath, "HEAD")); err != nil {
+		t.Fatalf("expected bare repository HEAD file: %v", err)
 	}
 }
 

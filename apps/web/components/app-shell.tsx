@@ -37,7 +37,7 @@ import type { Organization, Viewer } from "@/apps/web/lib/api"
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: Home },
   { href: "/clove", label: "Repositories", icon: GitPullRequestArrow },
-  { href: "/new", label: "New", icon: Plus },
+  { href: "/new/repository", label: "New", icon: Plus },
 ]
 
 export function AppShell({

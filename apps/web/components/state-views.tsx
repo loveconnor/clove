@@ -47,7 +47,7 @@ export function EmptyRepositoryState() {
       </EmptyHeader>
       <EmptyContent>
         <Button asChild>
-          <Link href="/new">New repository</Link>
+          <Link href="/new/repository">New repository</Link>
         </Button>
       </EmptyContent>
     </Empty>

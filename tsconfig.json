@@ -19,7 +19,13 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/components/ui/code-block": ["./packages/ui/code-block"],
+      "@/components/ui/code-block/*": ["./packages/ui/code-block/*"],
+      "@/lib/utils": ["./packages/ui/lib/utils"],
+      "@/*": ["./*"],
+      "#/components/ui/*": ["./packages/ui/*"],
+      "@loveui/ui/lib/*": ["./packages/ui/lib/*"],
+      "@loveui/ui/ui/*": ["./packages/ui/*"]
     }
   },
   "include": [

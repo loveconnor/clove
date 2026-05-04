@@ -46,6 +46,30 @@ export type Commit = {
   parents: string[]
 }
 
+export type RepositoryTreeEntry = {
+  name: string
+  path: string
+  type: "blob" | "tree" | string
+  mode: string
+  sha: string
+}
+
+export type RepositoryTree = {
+  repository: Repository
+  ref: string
+  commit_sha: string
+  path: string
+  entries: RepositoryTreeEntry[]
+}
+
+export type RepositoryBlob = {
+  path: string
+  sha: string
+  size: number
+  content: string
+  encoding: string
+}
+
 export type ListRepositoriesParams = {
   owner?: string
   visibility?: RepositoryVisibility
@@ -130,6 +154,33 @@ export function getRepository(
     path: repoPath(owner, repo),
     signal,
   }).then((r) => r.repository)
+}
+
+export function getRepositoryTree(
+  client: ApiClient,
+  owner: string,
+  repo: string,
+  params: { ref?: string; path?: string } = {},
+  signal?: AbortSignal
+) {
+  return request<RepositoryTree>(client, {
+    path: repoPath(owner, repo, `/tree${buildQuery(params)}`),
+    signal,
+  })
+}
+
+export function getRepositoryBlob(
+  client: ApiClient,
+  owner: string,
+  repo: string,
+  path: string,
+  ref?: string,
+  signal?: AbortSignal
+) {
+  return request<{ blob: RepositoryBlob }>(client, {
+    path: repoPath(owner, repo, `/blob${buildQuery({ path, ref })}`),
+    signal,
+  }).then((r) => r.blob)
 }
 
 export function createRepository(

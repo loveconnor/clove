@@ -18,7 +18,10 @@ export type {
   Branch,
   Commit,
   Repository,
+  RepositoryBlob,
   RepositoryOwnerType,
+  RepositoryTree,
+  RepositoryTreeEntry,
   RepositoryVisibility,
   Tag,
 } from "./repos"

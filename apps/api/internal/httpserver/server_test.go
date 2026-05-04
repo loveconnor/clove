@@ -189,6 +189,40 @@ func TestInitializeBareRepository(t *testing.T) {
 	}
 }
 
+func TestParseGitTree(t *testing.T) {
+	t.Parallel()
+
+	output := []byte("100644 blob 1111111111111111111111111111111111111111\tREADME.md\x0040000 tree 2222222222222222222222222222222222222222\tsrc\x00")
+	entries, err := parseGitTree(output, "")
+	if err != nil {
+		t.Fatalf("parse git tree: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected two entries, got %#v", entries)
+	}
+	if entries[0].Name != "README.md" || entries[0].Type != "blob" || entries[0].Path != "README.md" {
+		t.Fatalf("unexpected first entry: %#v", entries[0])
+	}
+	if entries[1].Name != "src" || entries[1].Type != "tree" || entries[1].Path != "src" {
+		t.Fatalf("unexpected second entry: %#v", entries[1])
+	}
+}
+
+func TestValidateGitObjectPath(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"README.md", "src/main.go", ""} {
+		if err := validateGitObjectPath(path); err != nil {
+			t.Fatalf("expected %q to be valid: %v", path, err)
+		}
+	}
+	for _, path := range []string{"/README.md", "../README.md", "src/../README.md", "src//main.go", `src\main.go`} {
+		if err := validateGitObjectPath(path); err == nil {
+			t.Fatalf("expected %q to be invalid", path)
+		}
+	}
+}
+
 type fakeAuth struct{}
 
 func (fakeAuth) Register(context.Context, auth.RegisterRequest, auth.RequestMetadata) (auth.Session, error) {

@@ -3,7 +3,11 @@ import { notFound, redirect } from "next/navigation"
 import {
   ArrowLeft,
   Code2,
+  FileCode2,
+  FileText,
+  Folder,
   GitBranch,
+  GitCommitHorizontal,
   GitPullRequestArrow,
   LockKeyhole,
   Settings,
@@ -22,7 +26,13 @@ import {
   EmptyTitle,
 } from "@loveui/ui/ui/empty"
 
-import { APIRequestError, getRepository } from "@/apps/web/lib/api"
+import {
+  APIRequestError,
+  getRepositoryBlob,
+  getRepository,
+  getRepositoryTree,
+  type RepositoryTreeEntry,
+} from "@/apps/web/lib/api"
 
 export default async function RepositoryPage({
   params,
@@ -30,8 +40,9 @@ export default async function RepositoryPage({
   params: Promise<{ owner: string; repo: string }>
 }) {
   const { owner, repo } = await params
-  const repository = await loadRepositoryData(owner, repo)
+  const { repository, tree, readme } = await loadRepositoryData(owner, repo)
   const cloneURL = `https://clove.dev/${repository.owner}/${repository.name}.git`
+  const hasFiles = Boolean(tree && tree.entries.length > 0)
 
   return (
     <div className="space-y-6">
@@ -70,7 +81,9 @@ export default async function RepositoryPage({
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">{repository.default_branch}</Badge>
-            <Badge variant="success">DB backed</Badge>
+            <Badge variant={hasFiles ? "success" : "outline"}>
+              {hasFiles ? "Pushed" : "Empty"}
+            </Badge>
             <Button variant="outline" size="sm" asChild>
               <Link href={`/${repository.owner}/${repository.name}/settings`}>
                 <Settings />
@@ -102,32 +115,24 @@ export default async function RepositoryPage({
       <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <Card variant="outline" className="rounded-lg">
           <CardHeader className="border-b">
-            <CardTitle>Files</CardTitle>
+            <div className="flex min-w-0 items-center justify-between gap-3">
+              <CardTitle>Files</CardTitle>
+              {tree ? (
+                <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                  <GitCommitHorizontal className="size-4 shrink-0" />
+                  <span className="truncate font-mono">
+                    {tree.commit_sha.slice(0, 12)}
+                  </span>
+                </div>
+              ) : null}
+            </div>
           </CardHeader>
           <CardPanel>
-            <Empty className="border">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <GitBranch />
-                </EmptyMedia>
-                <EmptyTitle>This repository is empty</EmptyTitle>
-                <EmptyDescription>
-                  Push an existing project or add a first commit to populate
-                  files, branches, pull requests, and checks.
-                </EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent className="max-w-full items-stretch">
-                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
-                  git remote add origin {cloneURL}
-                </code>
-                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
-                  git branch -M {repository.default_branch}
-                </code>
-                <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
-                  git push -u origin {repository.default_branch}
-                </code>
-              </EmptyContent>
-            </Empty>
+            {tree && tree.entries.length > 0 ? (
+              <FileList entries={tree.entries} />
+            ) : (
+              <EmptyRepository cloneURL={cloneURL} branch={repository.default_branch} />
+            )}
           </CardPanel>
         </Card>
 
@@ -163,13 +168,38 @@ export default async function RepositoryPage({
           </Card>
         </div>
       </section>
+
+      {readme ? (
+        <Card variant="outline" className="rounded-lg">
+          <CardHeader className="border-b">
+            <div className="flex items-center gap-2">
+              <FileText className="size-4 text-muted-foreground" />
+              <CardTitle>{readme.path}</CardTitle>
+            </div>
+          </CardHeader>
+          <CardPanel>
+            <pre className="max-h-[32rem] overflow-auto rounded-md border bg-background p-4 font-mono text-sm leading-6 whitespace-pre-wrap">
+              {readme.content}
+            </pre>
+          </CardPanel>
+        </Card>
+      ) : null}
     </div>
   )
 }
 
 async function loadRepositoryData(owner: string, repo: string) {
   try {
-    return await getRepository(owner, repo)
+    const repository = await getRepository(owner, repo)
+    const tree = await loadRepositoryTree(owner, repo, repository.default_branch)
+    const readmeEntry = tree?.entries.find((entry) =>
+      /^readme(?:\.[^.]+)?$/i.test(entry.name)
+    )
+    const readme =
+      readmeEntry?.type === "blob"
+        ? await loadRepositoryBlob(owner, repo, readmeEntry.path, repository.default_branch)
+        : null
+    return { repository, tree, readme }
   } catch (error) {
     if (error instanceof APIRequestError && error.status === 401) {
       redirect("/login")
@@ -183,6 +213,34 @@ async function loadRepositoryData(owner: string, repo: string) {
     }
     if (error instanceof APIRequestError && error.status === 404) {
       notFound()
+    }
+    throw error
+  }
+}
+
+async function loadRepositoryTree(owner: string, repo: string, ref: string) {
+  try {
+    return await getRepositoryTree(owner, repo, ref)
+  } catch (error) {
+    if (error instanceof APIRequestError && error.status === 404) {
+      return null
+    }
+    throw error
+  }
+}
+
+async function loadRepositoryBlob(
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string
+) {
+  try {
+    const data = await getRepositoryBlob(owner, repo, path, ref)
+    return data.blob
+  } catch (error) {
+    if (error instanceof APIRequestError && error.status === 404) {
+      return null
     }
     throw error
   }
@@ -217,6 +275,64 @@ function Metric({
         </div>
       </CardPanel>
     </Card>
+  )
+}
+
+function FileList({ entries }: { entries: RepositoryTreeEntry[] }) {
+  return (
+    <div className="overflow-hidden rounded-md border">
+      {entries.map((entry) => (
+        <div
+          key={`${entry.type}:${entry.path}`}
+          className="grid grid-cols-[minmax(0,1fr)_6.5rem] items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            {entry.type === "tree" ? (
+              <Folder className="size-4 shrink-0 text-primary" />
+            ) : (
+              <FileCode2 className="size-4 shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate text-sm font-medium">{entry.name}</span>
+          </div>
+          <span className="truncate text-right font-mono text-xs text-muted-foreground">
+            {entry.sha.slice(0, 7)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function EmptyRepository({
+  cloneURL,
+  branch,
+}: {
+  cloneURL: string
+  branch: string
+}) {
+  return (
+    <Empty className="border">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <GitBranch />
+        </EmptyMedia>
+        <EmptyTitle>This repository is empty</EmptyTitle>
+        <EmptyDescription>
+          Push an existing project or add a first commit to populate files.
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="max-w-full items-stretch">
+        <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+          git remote add origin {cloneURL}
+        </code>
+        <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+          git branch -M {branch}
+        </code>
+        <code className="block overflow-x-auto rounded-md border bg-background px-3 py-2 text-left font-mono text-xs">
+          git push -u origin {branch}
+        </code>
+      </EmptyContent>
+    </Empty>
   )
 }
 

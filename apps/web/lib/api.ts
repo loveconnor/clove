@@ -51,6 +51,37 @@ export type Repository = {
   updated_at: string
 }
 
+export type RepositoryTreeEntry = {
+  name: string
+  path: string
+  type: "blob" | "tree" | string
+  mode: string
+  sha: string
+}
+
+export type RepositoryTree = {
+  repository: Repository
+  ref: string
+  commit_sha: string
+  path: string
+  entries: RepositoryTreeEntry[]
+}
+
+export type RepositoryBlob = {
+  path: string
+  sha: string
+  size: number
+  content: string
+  encoding: string
+}
+
+export type RepositoryBlobResponse = {
+  repository: Repository
+  ref: string
+  commit_sha: string
+  blob: RepositoryBlob
+}
+
 type APIError = {
   error?: {
     code?: string
@@ -110,6 +141,34 @@ export async function getRepository(owner: string, repo: string) {
     `/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
   )
   return data.repository
+}
+
+export async function getRepositoryTree(
+  owner: string,
+  repo: string,
+  ref?: string,
+  path?: string
+) {
+  const query = new URLSearchParams()
+  if (ref) query.set("ref", ref)
+  if (path) query.set("path", path)
+  const suffix = query.toString() ? `?${query.toString()}` : ""
+  return apiFetch<RepositoryTree>(
+    `/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/tree${suffix}`
+  )
+}
+
+export async function getRepositoryBlob(
+  owner: string,
+  repo: string,
+  path: string,
+  ref?: string
+) {
+  const query = new URLSearchParams({ path })
+  if (ref) query.set("ref", ref)
+  return apiFetch<RepositoryBlobResponse>(
+    `/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/blob?${query.toString()}`
+  )
 }
 
 async function apiFetch<T>(path: string): Promise<T> {

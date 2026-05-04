@@ -3,6 +3,7 @@ package httpserver
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -80,6 +81,22 @@ type repositoryResponse struct {
 	GitPath       string    `json:"git_path"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type gitTreeEntryResponse struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Type string `json:"type"`
+	Mode string `json:"mode"`
+	SHA  string `json:"sha"`
+}
+
+type gitBlobResponse struct {
+	Path     string `json:"path"`
+	SHA      string `json:"sha"`
+	Size     int64  `json:"size"`
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
 }
 
 func (s *Server) handleOrganizations(w http.ResponseWriter, r *http.Request) {
@@ -615,47 +632,101 @@ func (s *Server) handleRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner := strings.TrimSpace(r.PathValue("owner"))
-	repo := strings.TrimSpace(r.PathValue("repo"))
-	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT r.id, r.owner_type, r.owner_id,
-			CASE WHEN r.owner_type = 'organization' THEN o.name ELSE u.username END AS owner,
-			r.name, COALESCE(r.description, ''), r.visibility, r.default_branch,
-			r.git_path, r.created_at, r.updated_at
-		FROM repositories r
-		LEFT JOIN organizations o ON r.owner_type = 'organization' AND r.owner_id = o.id
-		LEFT JOIN users u ON r.owner_type = 'user' AND r.owner_id = u.id
-		LEFT JOIN organization_members om
-			ON r.owner_type = 'organization'
-			AND om.organization_id = r.owner_id
-			AND om.user_id = $1
-		WHERE (o.name = $2 OR u.username = $2)
-			AND r.name = $3
-			AND (
-				r.visibility = 'public'
-				OR r.owner_id = $1
-				OR om.user_id = $1
-				OR (r.visibility = 'internal' AND $1 <> '')
-			)
-	`, principal.User.ID, owner, repo)
+	repository, err := s.loadRepositoryForUser(r, principal.User.ID, strings.TrimSpace(r.PathValue("owner")), strings.TrimSpace(r.PathValue("repo")))
 	if err != nil {
-		apierror.Write(w, r, apierror.Internal("Could not load repository."))
-		return
-	}
-	defer rows.Close()
-
-	repositories, err := scanRepositories(rows)
-	if err != nil {
-		apierror.Write(w, r, apierror.Internal("Could not load repository."))
-		return
-	}
-	if len(repositories) == 0 {
-		apierror.Write(w, r, apierror.NotFound("repository not found"))
+		apierror.Write(w, r, err)
 		return
 	}
 
 	apierror.Respond(w, r, http.StatusOK, map[string]any{
-		"repository": repositories[0],
+		"repository": repository,
+		"request_id": RequestID(r.Context()),
+	})
+}
+
+func (s *Server) handleRepositoryTree(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		apierror.Write(w, r, apierror.Unauthorized("authentication required"))
+		return
+	}
+	if !s.requireDatabase(w, r) {
+		return
+	}
+
+	repository, err := s.loadRepositoryForUser(r, principal.User.ID, strings.TrimSpace(r.PathValue("owner")), strings.TrimSpace(r.PathValue("repo")))
+	if err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		ref = repository.DefaultBranch
+	}
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if err := validateGitObjectPath(path); err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	entries, commitSHA, err := s.gitTree(r, repository, ref, path)
+	if err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	apierror.Respond(w, r, http.StatusOK, map[string]any{
+		"repository": repository,
+		"ref":        ref,
+		"commit_sha": commitSHA,
+		"path":       path,
+		"entries":    entries,
+		"request_id": RequestID(r.Context()),
+	})
+}
+
+func (s *Server) handleRepositoryBlob(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		apierror.Write(w, r, apierror.Unauthorized("authentication required"))
+		return
+	}
+	if !s.requireDatabase(w, r) {
+		return
+	}
+
+	repository, err := s.loadRepositoryForUser(r, principal.User.ID, strings.TrimSpace(r.PathValue("owner")), strings.TrimSpace(r.PathValue("repo")))
+	if err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		ref = repository.DefaultBranch
+	}
+	path := strings.TrimSpace(r.URL.Query().Get("path"))
+	if path == "" {
+		apierror.Write(w, r, apierror.BadRequest("path is required"))
+		return
+	}
+	if err := validateGitObjectPath(path); err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	blob, commitSHA, err := s.gitBlob(r, repository, ref, path)
+	if err != nil {
+		apierror.Write(w, r, err)
+		return
+	}
+
+	apierror.Respond(w, r, http.StatusOK, map[string]any{
+		"repository": repository,
+		"ref":        ref,
+		"commit_sha": commitSHA,
+		"blob":       blob,
 		"request_id": RequestID(r.Context()),
 	})
 }
@@ -774,7 +845,153 @@ func (s *Server) initializeBareRepository(r *http.Request, repositoryID string) 
 		}
 		return "", errors.Join(err, errors.New(message))
 	}
+	cmd = exec.CommandContext(r.Context(), "git", "--git-dir", gitPath, "symbolic-ref", "HEAD", "refs/heads/main")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			return "", err
+		}
+		return "", errors.Join(err, errors.New(message))
+	}
 	return gitPath, nil
+}
+
+func (s *Server) loadRepositoryForUser(r *http.Request, userID, owner, repo string) (repositoryResponse, error) {
+	rows, err := s.db.QueryContext(r.Context(), `
+		SELECT r.id, r.owner_type, r.owner_id,
+			CASE WHEN r.owner_type = 'organization' THEN o.name ELSE u.username END AS owner,
+			r.name, COALESCE(r.description, ''), r.visibility, r.default_branch,
+			r.git_path, r.created_at, r.updated_at
+		FROM repositories r
+		LEFT JOIN organizations o ON r.owner_type = 'organization' AND r.owner_id = o.id
+		LEFT JOIN users u ON r.owner_type = 'user' AND r.owner_id = u.id
+		LEFT JOIN organization_members om
+			ON r.owner_type = 'organization'
+			AND om.organization_id = r.owner_id
+			AND om.user_id = $1
+		WHERE (o.name = $2 OR u.username = $2)
+			AND r.name = $3
+			AND (
+				r.visibility = 'public'
+				OR r.owner_id = $1
+				OR om.user_id = $1
+				OR (r.visibility = 'internal' AND $1 <> '')
+			)
+	`, userID, owner, repo)
+	if err != nil {
+		return repositoryResponse{}, apierror.Internal("Could not load repository.")
+	}
+	defer rows.Close()
+
+	repositories, err := scanRepositories(rows)
+	if err != nil {
+		return repositoryResponse{}, apierror.Internal("Could not load repository.")
+	}
+	if len(repositories) == 0 {
+		return repositoryResponse{}, apierror.NotFound("repository not found")
+	}
+	return repositories[0], nil
+}
+
+func (s *Server) gitTree(r *http.Request, repository repositoryResponse, ref, path string) ([]gitTreeEntryResponse, string, error) {
+	commitSHA, err := s.gitCommitSHA(r, repository, ref)
+	if err != nil {
+		return nil, "", err
+	}
+
+	args := []string{"--git-dir", repository.GitPath, "ls-tree", "-z", ref}
+	if path != "" {
+		args = append(args, "--", path)
+	}
+	output, err := exec.CommandContext(r.Context(), "git", args...).Output()
+	if err != nil {
+		return nil, "", apierror.NotFound("git tree not found")
+	}
+	entries, err := parseGitTree(output, path)
+	if err != nil {
+		return nil, "", apierror.Internal("Could not parse git tree.")
+	}
+	return entries, commitSHA, nil
+}
+
+func (s *Server) gitBlob(r *http.Request, repository repositoryResponse, ref, path string) (gitBlobResponse, string, error) {
+	commitSHA, err := s.gitCommitSHA(r, repository, ref)
+	if err != nil {
+		return gitBlobResponse{}, "", err
+	}
+
+	object := ref + ":" + path
+	shaOutput, err := exec.CommandContext(r.Context(), "git", "--git-dir", repository.GitPath, "rev-parse", object).Output()
+	if err != nil {
+		return gitBlobResponse{}, "", apierror.NotFound("git blob not found")
+	}
+	content, err := exec.CommandContext(r.Context(), "git", "--git-dir", repository.GitPath, "cat-file", "blob", object).Output()
+	if err != nil {
+		return gitBlobResponse{}, "", apierror.NotFound("git blob not found")
+	}
+
+	return gitBlobResponse{
+		Path:     path,
+		SHA:      strings.TrimSpace(string(shaOutput)),
+		Size:     int64(len(content)),
+		Content:  string(content),
+		Encoding: "utf-8",
+	}, commitSHA, nil
+}
+
+func (s *Server) gitCommitSHA(r *http.Request, repository repositoryResponse, ref string) (string, error) {
+	if strings.TrimSpace(repository.GitPath) == "" {
+		return "", apierror.NotFound("git repository not found")
+	}
+	output, err := exec.CommandContext(r.Context(), "git", "--git-dir", repository.GitPath, "rev-parse", "--verify", ref+"^{commit}").Output()
+	if err != nil {
+		return "", apierror.NotFound("git ref not found")
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func parseGitTree(output []byte, basePath string) ([]gitTreeEntryResponse, error) {
+	entries := []gitTreeEntryResponse{}
+	for _, raw := range strings.Split(string(output), "\x00") {
+		if raw == "" {
+			continue
+		}
+		header, name, ok := strings.Cut(raw, "\t")
+		if !ok {
+			return nil, fmt.Errorf("invalid git tree entry %q", raw)
+		}
+		parts := strings.Split(header, " ")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("invalid git tree entry header %q", header)
+		}
+		entryPath := name
+		if basePath != "" {
+			entryPath = strings.Trim(basePath, "/") + "/" + name
+		}
+		entries = append(entries, gitTreeEntryResponse{
+			Name: name,
+			Path: entryPath,
+			Mode: parts[0],
+			Type: parts[1],
+			SHA:  parts[2],
+		})
+	}
+	return entries, nil
+}
+
+func validateGitObjectPath(path string) error {
+	if path == "" {
+		return nil
+	}
+	if strings.Contains(path, "\x00") || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
+		return apierror.BadRequest("path is invalid")
+	}
+	for _, part := range strings.Split(path, "/") {
+		if part == "" || part == "." || part == ".." {
+			return apierror.BadRequest("path is invalid")
+		}
+	}
+	return nil
 }
 
 func (s *Server) resolveRepositoryOwner(r *http.Request, principal auth.Principal, owner string) (string, string, error) {

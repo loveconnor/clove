@@ -21,10 +21,6 @@ type Config struct {
 	DatabasePingTime  time.Duration
 	RepositoryRoot    string
 	GitBin            string
-	WorkOSClientID    string
-	WorkOSBaseURL     string
-	WorkOSIssuer      string
-	AccessCookieName  string
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -73,10 +69,6 @@ func Load() (Config, error) {
 		DatabasePingTime:  databasePingTime,
 		RepositoryRoot:    envString("REPOSITORY_ROOT", "/data/repos"),
 		GitBin:            envString("GIT_BIN", "git"),
-		WorkOSClientID:    strings.TrimSpace(os.Getenv("WORKOS_CLIENT_ID")),
-		WorkOSBaseURL:     envString("WORKOS_BASE_URL", "https://api.workos.com"),
-		WorkOSIssuer:      envString("WORKOS_ISSUER", "https://api.workos.com/"),
-		AccessCookieName:  envString("AUTH_ACCESS_COOKIE", "clove_access_token"),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

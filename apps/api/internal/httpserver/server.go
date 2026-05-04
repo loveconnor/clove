@@ -66,6 +66,9 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/repositories", s.requireSession(http.HandlerFunc(s.handleRepositories)))
 	s.mux.Handle("POST /api/repositories", s.requireSession(http.HandlerFunc(s.handleCreateRepository)))
 	s.mux.Handle("GET /api/repositories/{owner}/{repo}", s.requireSession(http.HandlerFunc(s.handleRepository)))
+	s.mux.Handle("GET /api/personal-access-tokens", s.requireSession(http.HandlerFunc(s.handlePersonalAccessTokens)))
+	s.mux.Handle("POST /api/personal-access-tokens", s.requireSession(http.HandlerFunc(s.handleCreatePersonalAccessToken)))
+	s.mux.Handle("DELETE /api/personal-access-tokens/{id}", s.requireSession(http.HandlerFunc(s.handleDeletePersonalAccessToken)))
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

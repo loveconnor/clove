@@ -32,6 +32,52 @@ func TestInitialMigrationContainsCoreTables(t *testing.T) {
 	}
 }
 
+func TestPersonalAccessTokenMigration(t *testing.T) {
+	t.Parallel()
+
+	sqlBytes, err := migrationsFS.ReadFile("migrations/000004_personal_access_tokens.sql")
+	if err != nil {
+		t.Fatalf("read personal access token migration: %v", err)
+	}
+
+	migration := string(sqlBytes)
+	for _, needle := range []string{
+		"CREATE TABLE IF NOT EXISTS personal_access_tokens",
+		"user_id TEXT NOT NULL REFERENCES users(id)",
+		"token_hash TEXT NOT NULL UNIQUE",
+		"last_used_at TIMESTAMPTZ",
+	} {
+		if !strings.Contains(migration, needle) {
+			t.Fatalf("expected migration to contain %q", needle)
+		}
+	}
+}
+
+func TestGitRefsPushEventsMigration(t *testing.T) {
+	t.Parallel()
+
+	sqlBytes, err := migrationsFS.ReadFile("migrations/000005_git_refs_push_events.sql")
+	if err != nil {
+		t.Fatalf("read git refs push events migration: %v", err)
+	}
+
+	migration := string(sqlBytes)
+	for _, needle := range []string{
+		"CREATE TABLE IF NOT EXISTS git_refs",
+		"CREATE TABLE IF NOT EXISTS push_events",
+		"repo_id TEXT NOT NULL REFERENCES repositories(id)",
+		"ref_name TEXT NOT NULL",
+		"old_sha TEXT NOT NULL",
+		"new_sha TEXT NOT NULL",
+		"pusher_id TEXT REFERENCES users(id)",
+		"created_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+	} {
+		if !strings.Contains(migration, needle) {
+			t.Fatalf("expected migration to contain %q", needle)
+		}
+	}
+}
+
 func TestInitialMigrationUsesUUIDPrimaryKeys(t *testing.T) {
 	t.Parallel()
 

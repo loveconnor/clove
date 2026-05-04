@@ -12,11 +12,16 @@ Smart HTTP service for Git clone, fetch, and push.
 ## Authentication
 
 Public repositories can be cloned and fetched anonymously. Private repositories
-and all pushes require a valid WorkOS access token supplied as either:
+and all pushes require HTTP Basic credentials:
 
-- `Authorization: Bearer <access-token>`
-- HTTP Basic auth, where the password is the access token
-- the configured access-token cookie
+- Username: the user's Clove username
+- Password: a personal access token
+
+Personal access tokens are managed through the API service:
+
+- `GET /api/personal-access-tokens`
+- `POST /api/personal-access-tokens`
+- `DELETE /api/personal-access-tokens/{id}`
 
 Push authorization is restricted to personal repository owners and organization
 owners/admins.
@@ -29,5 +34,4 @@ go run ./cmd/git-http
 ```
 
 The service defaults to `GIT_HTTP_PORT=8081` and reads the shared
-`DATABASE_URL`, `REPOSITORY_ROOT`, `WORKOS_CLIENT_ID`, and `WORKOS_ISSUER`
-environment variables.
+`DATABASE_URL` and `REPOSITORY_ROOT` environment variables.

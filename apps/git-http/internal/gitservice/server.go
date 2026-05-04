@@ -1,9 +1,13 @@
 package gitservice
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -13,10 +17,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"clove/apps/git-http/internal/auth"
 	"clove/apps/git-http/internal/config"
 )
 
@@ -33,28 +37,33 @@ var (
 )
 
 type Authenticator interface {
-	Authenticate(ctx context.Context, token string) (auth.Principal, error)
-	Configured() bool
+	Authenticate(ctx context.Context, username, token string) (Principal, error)
 }
 
 type RepositoryStore interface {
 	FindRepository(ctx context.Context, owner, name, userID string) (Repository, error)
 }
 
+type PushRecorder interface {
+	RecordPush(ctx context.Context, repo Repository, pusher Principal, updates []RefUpdate) error
+}
+
 type Server struct {
-	cfg    config.Config
-	store  RepositoryStore
-	auth   Authenticator
-	logger *slog.Logger
-	gitBin string
-	mux    *http.ServeMux
+	cfg      config.Config
+	store    RepositoryStore
+	recorder PushRecorder
+	auth     Authenticator
+	logger   *slog.Logger
+	gitBin   string
+	mux      *http.ServeMux
 }
 
 type Dependencies struct {
-	Config config.Config
-	Store  RepositoryStore
-	Auth   Authenticator
-	Logger *slog.Logger
+	Config   config.Config
+	Store    RepositoryStore
+	Recorder PushRecorder
+	Auth     Authenticator
+	Logger   *slog.Logger
 }
 
 type Repository struct {
@@ -66,6 +75,23 @@ type Repository struct {
 	Visibility string
 	GitPath    string
 	UserRole   string
+}
+
+type Principal struct {
+	UserID   string
+	Username string
+	Email    string
+}
+
+type Credentials struct {
+	Username string
+	Password string
+}
+
+type RefUpdate struct {
+	RefName string
+	OldSHA  string
+	NewSHA  string
 }
 
 type route struct {
@@ -85,13 +111,21 @@ func New(deps Dependencies) http.Handler {
 		gitBin = "git"
 	}
 
+	recorder := deps.Recorder
+	if recorder == nil {
+		if storeRecorder, ok := deps.Store.(PushRecorder); ok {
+			recorder = storeRecorder
+		}
+	}
+
 	s := &Server{
-		cfg:    deps.Config,
-		store:  deps.Store,
-		auth:   deps.Auth,
-		logger: logger,
-		gitBin: gitBin,
-		mux:    http.NewServeMux(),
+		cfg:      deps.Config,
+		store:    deps.Store,
+		recorder: recorder,
+		auth:     deps.Auth,
+		logger:   logger,
+		gitBin:   gitBin,
+		mux:      http.NewServeMux(),
 	}
 	s.routes()
 	return s.requestLogger(s.mux)
@@ -165,31 +199,34 @@ func (s *Server) handleGit(w http.ResponseWriter, r *http.Request) {
 	repository.GitPath = gitPath
 
 	if rt.RPC {
-		s.handleRPC(w, r, rt.Service, repository)
+		s.handleRPC(w, r, rt.Service, repository, principal)
 		return
 	}
 	s.handleInfoRefs(w, r, rt.Service, repository)
 }
 
-func (s *Server) authenticateRequest(r *http.Request) (auth.Principal, bool, error) {
-	token := tokenFromRequest(r, s.cfg.AccessCookieName)
-	if token == "" {
-		return auth.Principal{}, false, nil
+func (s *Server) authenticateRequest(r *http.Request) (Principal, bool, error) {
+	credentials := credentialsFromRequest(r)
+	if credentials.Username == "" && credentials.Password == "" {
+		return Principal{}, false, nil
 	}
-	if s.auth == nil || !s.auth.Configured() {
-		return auth.Principal{}, false, errAuthUnavailable
+	if credentials.Username == "" || credentials.Password == "" {
+		return Principal{}, false, errAuthRequired
 	}
-	principal, err := s.auth.Authenticate(r.Context(), token)
+	if s.auth == nil {
+		return Principal{}, false, errAuthUnavailable
+	}
+	principal, err := s.auth.Authenticate(r.Context(), credentials.Username, credentials.Password)
 	if err != nil {
-		return auth.Principal{}, false, err
+		return Principal{}, false, err
 	}
 	return principal, true, nil
 }
 
-func (s *Server) authorize(service string, repo Repository, principal auth.Principal, authenticated bool) error {
+func (s *Server) authorize(service string, repo Repository, principal Principal, authenticated bool) error {
 	if service == serviceReceivePack {
 		if !authenticated {
-			if s.auth == nil || !s.auth.Configured() {
+			if s.auth == nil {
 				return errAuthUnavailable
 			}
 			return errAuthRequired
@@ -204,7 +241,7 @@ func (s *Server) authorize(service string, repo Repository, principal auth.Princ
 		return nil
 	}
 	if !authenticated {
-		if s.auth == nil || !s.auth.Configured() {
+		if s.auth == nil {
 			return errAuthUnavailable
 		}
 		return errAuthRequired
@@ -230,20 +267,75 @@ func (s *Server) handleInfoRefs(w http.ResponseWriter, r *http.Request, service 
 	}
 }
 
-func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request, service string, repo Repository) {
+func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request, service string, repo Repository, principal Principal) {
 	defer r.Body.Close()
 
 	setNoCache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-%s-result", service))
 
+	stdin := io.Reader(r.Body)
+	var updates []RefUpdate
+	if service == serviceReceivePack {
+		prefix, parsedUpdates, err := readReceivePackCommands(r.Body)
+		if err != nil {
+			s.logger.Warn("git receive-pack command parsing failed",
+				slog.Any("error", err),
+				slog.String("repository_id", repo.ID),
+			)
+			http.Error(w, "invalid receive-pack request", http.StatusBadRequest)
+			return
+		}
+		stdin = io.MultiReader(bytes.NewReader(prefix), r.Body)
+		updates = parsedUpdates
+	}
+
 	cmd := s.gitCommand(r, service, "--stateless-rpc", repo.GitPath)
-	if err := runGit(cmd, r.Body, w); err != nil {
+	if err := runGit(cmd, stdin, w); err != nil {
 		s.logger.Warn("git rpc failed",
 			slog.Any("error", err),
 			slog.String("service", service),
 			slog.String("repository_id", repo.ID),
 		)
+		return
 	}
+
+	if service == serviceReceivePack && len(updates) > 0 && s.recorder != nil {
+		acceptedUpdates := s.acceptedRefUpdates(r.Context(), repo, updates)
+		if len(acceptedUpdates) == 0 {
+			return
+		}
+		if err := s.recorder.RecordPush(r.Context(), repo, principal, acceptedUpdates); err != nil {
+			s.logger.Error("push event recording failed",
+				slog.Any("error", err),
+				slog.String("repository_id", repo.ID),
+				slog.Int("ref_updates", len(acceptedUpdates)),
+			)
+		}
+	}
+}
+
+func (s *Server) acceptedRefUpdates(ctx context.Context, repo Repository, updates []RefUpdate) []RefUpdate {
+	accepted := make([]RefUpdate, 0, len(updates))
+	for _, update := range updates {
+		if refUpdateApplied(ctx, s.gitBin, repo.GitPath, update) {
+			accepted = append(accepted, update)
+		}
+	}
+	return accepted
+}
+
+func refUpdateApplied(ctx context.Context, gitBin, gitPath string, update RefUpdate) bool {
+	if allZeroSHA(update.NewSHA) {
+		cmd := exec.CommandContext(ctx, gitBin, "--git-dir", gitPath, "rev-parse", "--verify", "--quiet", update.RefName)
+		return cmd.Run() != nil
+	}
+
+	cmd := exec.CommandContext(ctx, gitBin, "--git-dir", gitPath, "rev-parse", "--verify", "--quiet", update.RefName)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(string(output)), strings.TrimSpace(update.NewSHA))
 }
 
 func (s *Server) gitCommand(r *http.Request, service string, args ...string) *exec.Cmd {
@@ -269,6 +361,71 @@ func runGit(cmd *exec.Cmd, stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("%w: %s", err, message)
 	}
 	return nil
+}
+
+func readReceivePackCommands(body io.Reader) ([]byte, []RefUpdate, error) {
+	var prefix bytes.Buffer
+	var updates []RefUpdate
+
+	for {
+		header := make([]byte, 4)
+		if _, err := io.ReadFull(body, header); err != nil {
+			return nil, nil, err
+		}
+		prefix.Write(header)
+
+		sizeText := string(header)
+		size, err := strconv.ParseInt(sizeText, 16, 32)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid pkt-line size %q: %w", sizeText, err)
+		}
+		if size == 0 {
+			return prefix.Bytes(), updates, nil
+		}
+		if size < 4 {
+			return nil, nil, fmt.Errorf("invalid pkt-line size %d", size)
+		}
+
+		payload := make([]byte, int(size)-4)
+		if _, err := io.ReadFull(body, payload); err != nil {
+			return nil, nil, err
+		}
+		prefix.Write(payload)
+
+		if update, ok := parseReceivePackCommand(payload); ok {
+			updates = append(updates, update)
+		}
+	}
+}
+
+func parseReceivePackCommand(payload []byte) (RefUpdate, bool) {
+	line := string(payload)
+	if beforeCapabilities, _, ok := strings.Cut(line, "\x00"); ok {
+		line = beforeCapabilities
+	}
+	line = strings.TrimSpace(line)
+	parts := strings.Fields(line)
+	if len(parts) < 3 {
+		return RefUpdate{}, false
+	}
+	return RefUpdate{
+		OldSHA:  parts[0],
+		NewSHA:  parts[1],
+		RefName: parts[2],
+	}, true
+}
+
+func allZeroSHA(sha string) bool {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return false
+	}
+	for _, char := range sha {
+		if char != '0' {
+			return false
+		}
+	}
+	return true
 }
 
 func parseRoute(r *http.Request) (route, error) {
@@ -313,33 +470,24 @@ func parseRoute(r *http.Request) (route, error) {
 	return route{}, errNotFound
 }
 
-func tokenFromRequest(r *http.Request, accessCookieName string) string {
+func credentialsFromRequest(r *http.Request) Credentials {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
-	if strings.HasPrefix(strings.ToLower(header), "bearer ") {
-		return strings.TrimSpace(header[len("bearer "):])
-	}
 	if strings.HasPrefix(strings.ToLower(header), "basic ") {
 		encoded := strings.TrimSpace(header[len("basic "):])
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return ""
+			return Credentials{}
 		}
 		username, password, ok := strings.Cut(string(decoded), ":")
-		if ok && strings.TrimSpace(password) != "" {
-			return strings.TrimSpace(password)
+		if !ok {
+			return Credentials{}
 		}
-		return strings.TrimSpace(username)
+		return Credentials{Username: strings.TrimSpace(username), Password: strings.TrimSpace(password)}
 	}
-
-	if accessCookieName != "" {
-		if cookie, err := r.Cookie(accessCookieName); err == nil {
-			return cookie.Value
-		}
-	}
-	return ""
+	return Credentials{}
 }
 
-func canView(repo Repository, principal auth.Principal, authenticated bool) bool {
+func canView(repo Repository, principal Principal, authenticated bool) bool {
 	switch strings.ToLower(strings.TrimSpace(repo.Visibility)) {
 	case "public":
 		return true
@@ -353,7 +501,7 @@ func canView(repo Repository, principal auth.Principal, authenticated bool) bool
 	}
 }
 
-func canPush(repo Repository, principal auth.Principal) bool {
+func canPush(repo Repository, principal Principal) bool {
 	if repo.OwnerType == "user" && repo.OwnerID != "" && repo.OwnerID == principal.UserID {
 		return true
 	}
@@ -487,4 +635,100 @@ func (s DBStore) FindRepository(ctx context.Context, owner, name, userID string)
 		return Repository{}, err
 	}
 	return repo, nil
+}
+
+func (s DBStore) RecordPush(ctx context.Context, repo Repository, pusher Principal, updates []RefUpdate) error {
+	if s.DB == nil {
+		return errors.New("database is not configured")
+	}
+	if repo.ID == "" || pusher.UserID == "" || len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, update := range updates {
+		update.RefName = strings.TrimSpace(update.RefName)
+		update.OldSHA = strings.TrimSpace(update.OldSHA)
+		update.NewSHA = strings.TrimSpace(update.NewSHA)
+		if update.RefName == "" || update.OldSHA == "" || update.NewSHA == "" {
+			continue
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO git_refs (repo_id, ref_name, old_sha, new_sha, pusher_id)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (repo_id, ref_name) DO UPDATE SET
+				old_sha = EXCLUDED.old_sha,
+				new_sha = EXCLUDED.new_sha,
+				pusher_id = EXCLUDED.pusher_id,
+				created_at = now()
+		`, repo.ID, update.RefName, update.OldSHA, update.NewSHA, pusher.UserID); err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO push_events (id, repo_id, ref_name, old_sha, new_sha, pusher_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, newPushEventID(), repo.ID, update.RefName, update.OldSHA, update.NewSHA, pusher.UserID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func newPushEventID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "push_" + hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("push_%d", time.Now().UnixNano())
+}
+
+type DBAuth struct {
+	DB *sql.DB
+}
+
+func (a DBAuth) Authenticate(ctx context.Context, username, token string) (Principal, error) {
+	if a.DB == nil {
+		return Principal{}, errAuthUnavailable
+	}
+
+	username = strings.TrimSpace(username)
+	token = strings.TrimSpace(token)
+	if username == "" || token == "" {
+		return Principal{}, errAuthRequired
+	}
+
+	var principal Principal
+	err := a.DB.QueryRowContext(ctx, `
+		UPDATE personal_access_tokens pat
+		SET last_used_at = now()
+		FROM users u
+		WHERE pat.user_id = u.id
+			AND lower(u.username) = lower($1)
+			AND pat.token_hash = $2
+		RETURNING u.id, u.username, COALESCE(u.email, '')
+	`, username, hashPersonalAccessToken(token)).Scan(
+		&principal.UserID,
+		&principal.Username,
+		&principal.Email,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Principal{}, errAuthRequired
+	}
+	if err != nil {
+		return Principal{}, err
+	}
+	return principal, nil
+}
+
+func hashPersonalAccessToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"clove/apps/git-http/internal/auth"
 	"clove/apps/git-http/internal/config"
 	"clove/apps/git-http/internal/gitservice"
 
@@ -43,7 +42,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr(),
-		Handler:           gitservice.New(gitservice.Dependencies{Config: cfg, Store: gitservice.DBStore{DB: database}, Auth: auth.NewService(cfg), Logger: log}),
+		Handler:           gitservice.New(gitservice.Dependencies{Config: cfg, Store: gitservice.DBStore{DB: database}, Auth: gitservice.DBAuth{DB: database}, Logger: log}),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
